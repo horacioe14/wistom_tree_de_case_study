@@ -16,9 +16,10 @@ if __name__ == "__main__":
     monthly_analytics_df = etl_pipeline.transform_monthly_analytics(
         holdings_df, nav_df)
 
-    nav_df.to_excel("nav_output.xlsx", index=False)
-    holdings_df.to_excel("holdings_output.xlsx", index=False)
-    monthly_analytics_df.to_excel("monthly_analytics_output.xlsx", index=False)
+    nav_df.to_excel("./outputs/nav_output.xlsx", index=False)
+    holdings_df.to_excel("./outputs/holdings_output.xlsx", index=False)
+    monthly_analytics_df.to_excel(
+        "./outputs/monthly_analytics_output.xlsx", index=False)
 
 
 end_time = time.time()
