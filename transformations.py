@@ -78,7 +78,7 @@ class WisdomTreeDataPipeline:
                 self.excel_file, sheet_name="WT Products")
             products_df = products_df.rename(
                 columns={
-                    "WT ID": "wisdom_tree_id",
+                    "WT ID": "product_id",
                     "Ticker": "ticker",
                     "Product Name": "product_name",
                 }
@@ -98,7 +98,7 @@ class WisdomTreeDataPipeline:
                 self.excel_file, sheet_name="WT Expense Ratios")
             expense_df = expense_df.rename(
                 columns={"Expense Ratio": "expense_ratio",
-                         "WT ID": "wisdom_tree_id"}
+                         "WT ID": "product_id"}
             )
             return expense_df
         except Exception as e:
@@ -115,7 +115,7 @@ class WisdomTreeDataPipeline:
             nav_df = pd.read_excel(self.excel_file, sheet_name="NAV Data")
             nav_df = nav_df.rename(
                 columns={
-                    "WT ID": "wisdom_tree_id",
+                    "WT ID": "product_id",
                     "Date": "market_date",
                     "NAV": "net_asset_value",
                 }
@@ -124,21 +124,19 @@ class WisdomTreeDataPipeline:
             nav_df["market_date"] = nav_df["market_date"].apply(
                 self.nav_format_and_convert_date
             )
-            # nav_df["market_date"] = pd.to_datetime(nav_df["market_date"], dayfirst=False, errors="coerce")
 
-            # #reformat to yyyy-mm-dd
-            # nav_df["market_date"] = pd.to_datetime(nav_df["market_date"], format='%Y-%m-%d', errors="coerce")
+            nav_df["product_id"] = nav_df["product_id"].astype(int)
 
-            nav_df["wisdom_tree_id"] = nav_df["wisdom_tree_id"].astype(int)
+            output_nav_df = self.fill_missing_nav_dates(nav_df)
 
             # Adjust WCLD stock split (1-for-3 on 31 March 2024)
-            nav_df.loc[
-                (nav_df["wisdom_tree_id"] == 3105371)
-                & (nav_df["market_date"] >= "2024-03-31"),
+            # Starting from 30th due to backfill
+            output_nav_df.loc[
+                (output_nav_df["product_id"] == 3105371)
+                & (output_nav_df["market_date"] >= "2024-03-30"),
                 "net_asset_value",
             ] *= 3
 
-            output_nav_df = self.fill_missing_nav_dates(nav_df)
             print("nav data processing completed successfully")
             return output_nav_df
         except Exception as e:
@@ -200,8 +198,6 @@ class WisdomTreeDataPipeline:
 
                     client_unpivot_df["client_id"] = client_id.lower()
                     client_unpivot_df["quarter_date"] = sheet_quarter
-                    # client_unpivot_df["quarter_year"] = pd.DatetimeIndex(client_unpivot_df["quarter_date"]).year
-                    # client_unpivot_df["quarter_month"] = pd.DatetimeIndex(client_unpivot_df["quarter_date"]).month
                     client_unpivot_df["start_date"] = sheet_quarter
                     client_unpivot_df["start_date"] = pd.to_datetime(
                         client_unpivot_df["start_date"],
@@ -214,44 +210,13 @@ class WisdomTreeDataPipeline:
                         errors="coerce",
                     )
 
-                    # Create end_date column the mosth recent month_date
-                    # should have a null end_date else the most recent quarter
-                    quarter_index = sheet_quarters_list.index(sheet)
-                    if quarter_index < len(sheet_quarters_list) - 1:
-                        current_quarter = sheet_quarters_list[quarter_index].split("_")[
-                            1
-                        ]
-                        target_date = pd.Timestamp(current_quarter) - pd.DateOffset(
-                            months=8
-                        )
-                        quarter_index += 1
-                        # next_quarter_columns = pd.read_excel(self.excel_file, sheet_name=sheet_quarters_list[quarter_index], nrows=0).columns.tolist()
-                        # next_quarter_columns.remove('ticker')
-                        # next_quarter_columns = [pd.Timestamp(month_date) for month_date in next_quarter_columns]
-                        # print(next_quarter_columns)
-                        next_quarter = pd.Timestamp(
-                            sheet_quarters_list[quarter_index].split("_")[1]
-                        )
-                        client_unpivot_df["end_date"] = client_unpivot_df[
-                            "month_date"
-                        ].apply(
-                            lambda month_date: (
-                                next_quarter if month_date >= target_date else pd.NA
-                            )
-                        )
+                    # Create end_date column
+                    client_unpivot_df = self.add_holdings_end_date_column(
+                        sheet, sheet_quarters_list, client_unpivot_df)
 
-                    else:
-                        client_unpivot_df["end_date"] = pd.NA
-
-                    # If 'coerce', then invalid parsing will be set as NaT.
-                    client_unpivot_df["end_date"] = pd.to_datetime(
-                        client_unpivot_df["end_date"],
-                        format="%Y-%m-%d",
-                        errors="coerce",
-                    )
                     client_holdings_list.append(client_unpivot_df)
 
-            # Join with products table to get wisdom_tree_id
+            # Join with products table to get product_id
             holdings_df = pd.concat(client_holdings_list, ignore_index=True)
             holdings_df = holdings_df.merge(
                 self.products_table.drop(columns=["product_name"]),
@@ -259,22 +224,22 @@ class WisdomTreeDataPipeline:
                 how="left",
             )
             holdings_df.drop(columns=["ticker"])
-            holdings_df["wisdom_tree_id"] = holdings_df["wisdom_tree_id"].astype(
+            holdings_df["product_id"] = holdings_df["product_id"].astype(
                 int)
 
             # Adjust for WCLD stock split (1:3 on 31 March 2024)
             holdings_df.loc[
-                (holdings_df["wisdom_tree_id"] == 3105371)
-                & (holdings_df["quarter_date"] >= "2024-03-31"),
+                (holdings_df["product_id"] == 3105371)
+                & (holdings_df["month_date"] >= "2024-03-31"),
                 "holdings",
             ] /= 3
-            # remove columns
+            # clean table columns
             holdings_df = holdings_df[
                 [
                     "client_id",
                     "quarter_date",
                     "month_date",
-                    "wisdom_tree_id",
+                    "product_id",
                     "holdings",
                     "start_date",
                     "end_date",
@@ -288,6 +253,52 @@ class WisdomTreeDataPipeline:
 
         except Exception as e:
             print(f"Error, process_client_holdings() failed: {str(e)}")
+            return None
+
+    def add_holdings_end_date_column(
+            self,
+            input_sheet_name: str,
+            input_sheets_list: list,
+            input_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Creates end_date column using the next quarter date for a month_date.
+        Adds NULL where there is no next quater date
+        """
+        try:
+
+            quarter_index = input_sheets_list.index(input_sheet_name)
+            if quarter_index < len(input_sheets_list) - 1:
+                current_quarter = input_sheets_list[quarter_index].split("_")[
+                    1
+                ]
+                target_date = pd.Timestamp(current_quarter) - pd.DateOffset(
+                    months=8
+                )
+                quarter_index += 1
+                next_quarter = pd.Timestamp(
+                    input_sheets_list[quarter_index].split("_")[1]
+                )
+                input_df["end_date"] = input_df[
+                    "month_date"
+                ].apply(
+                    lambda month_date: (
+                        next_quarter if month_date >= target_date else pd.NA
+                    )
+                )
+
+            else:
+                input_df["end_date"] = pd.NA
+
+            # If 'coerce', then invalid parsing will be set as NaT.
+            input_df["end_date"] = pd.to_datetime(
+                input_df["end_date"],
+                format="%Y-%m-%d",
+                errors="coerce",
+            )
+
+            return input_df
+        except Exception as e:
+            print(f"Error, add_holdings_end_date_column() failed: {str(e)}")
             return None
 
     def fill_missing_months_holdings(
@@ -347,10 +358,11 @@ class WisdomTreeDataPipeline:
         the same month_date in the previous quarter
         2. Forward fills holdings with previous month
         where that month does not exist on the previous quarter
+        3. Creates boolean column "is_holdings_backfilled" where holdings == 0
         """
         try:
             holdings_df = holdings_df.sort_values(
-                ["client_id", "wisdom_tree_id", "quarter_date"]
+                ["client_id", "product_id", "quarter_date"]
             )
 
             # Convert nulls and empty cells to 0
@@ -359,20 +371,20 @@ class WisdomTreeDataPipeline:
             holdings_df["holdings"] = holdings_df["holdings"].replace(" ", 0)
             holdings_df["is_holdings_backfilled"] = (
                 holdings_df["holdings"] == 0
-            ).astype(int)
+            ).astype(bool)
 
             missing_holdings_mask = holdings_df["holdings"] == 0
 
             # Shift one to get previous quarter
             holdings_df.loc[missing_holdings_mask, "holdings"] = holdings_df.groupby(
-                ["client_id", "wisdom_tree_id", "month_date"]
+                ["client_id", "product_id", "month_date"]
             )["holdings"].shift(1)
 
             # Forward fills holdings previous month instead where
             # month does not exist on the previous quarter
             if holdings_df["holdings"].isnull().values.any():
                 holdings_df["holdings"] = holdings_df.groupby(
-                    ["client_id", "wisdom_tree_id"]
+                    ["client_id", "product_id"]
                 )["holdings"].ffill()
 
             return holdings_df
@@ -394,33 +406,33 @@ class WisdomTreeDataPipeline:
             )
 
             # Create a new dataframe with completed date range
-            # for each wisdom_tree_id
-            unique_ids = nav_data["wisdom_tree_id"].unique()
+            # for each product_id
+            unique_ids = nav_data["product_id"].unique()
             # Cartesian product of indexes using the product ids
             # and full list of dates
             complete_index = pd.MultiIndex.from_product(
                 [unique_ids, complete_dates], names=[
-                    "wisdom_tree_id", "market_date"]
+                    "product_id", "market_date"]
             )
 
             # Reindex NAV data to ensure all dates exist for each
-            # wisdom_tree_id
-            nav_data = nav_data.set_index(["wisdom_tree_id", "market_date"]).reindex(
+            # product_id
+            nav_data = nav_data.set_index(["product_id", "market_date"]).reindex(
                 complete_index
             )
 
-            # Backward fill NAV values within each wisdom_tree_id
+            # Backward fill NAV values within each product_id
             nav_data = nav_data.sort_values(["market_date"]).reset_index()
             nav_data["is_nav_backfilled"] = (
-                nav_data["net_asset_value"].isna().astype(int)
+                nav_data["net_asset_value"].isna().astype(bool)
             )
-            nav_data["net_asset_value"] = nav_data.groupby(["wisdom_tree_id"])[
+            nav_data["net_asset_value"] = nav_data.groupby(["product_id"])[
                 "net_asset_value"
             ].bfill()
 
             # Forward fill if any remaining nulls
             if nav_data["net_asset_value"].isnull().values.any():
-                nav_data["net_asset_value"] = nav_data.groupby(["wisdom_tree_id"])[
+                nav_data["net_asset_value"] = nav_data.groupby(["product_id"])[
                     "net_asset_value"
                 ].ffill()
 
@@ -442,28 +454,28 @@ class WisdomTreeDataPipeline:
         """
         try:
 
-            input_holdings_df = input_holdings_df.sort_values(
-                ["client_id", "wisdom_tree_id", "month_date"]
-            )
             # Get the latest data of holdings
             holdings_latest_df = input_holdings_df[
                 input_holdings_df["end_date"].isnull()
             ]
+            holdings_latest_df = holdings_latest_df.sort_values(
+                ["client_id", "product_id", "month_date"]
+            )
 
             # Left join holdings table with with nav and expenses tables
             holdings_nav_df = holdings_latest_df.merge(
                 input_nav_df,
-                left_on=["wisdom_tree_id", "month_date"],
-                right_on=["wisdom_tree_id", "market_date"],
+                left_on=["product_id", "month_date"],
+                right_on=["product_id", "market_date"],
                 how="left",
             )
             holdings_nav_expense_df = holdings_nav_df.merge(
-                self.expense_ratios_table, on=["wisdom_tree_id"], how="left"
+                self.expense_ratios_table, on=["product_id"], how="left"
             )
 
             # Adjust GGRA expense ratio change on 30 June 2024
             holdings_nav_expense_df.loc[
-                (holdings_nav_expense_df["wisdom_tree_id"] == 1001656)
+                (holdings_nav_expense_df["product_id"] == 1001656)
                 & (holdings_nav_expense_df["market_date"] < pd.Timestamp("2024-06-30")),
                 "expense_ratio",
             ] = 0.0028
@@ -498,7 +510,7 @@ class WisdomTreeDataPipeline:
             holdings_nav_expense_df = holdings_nav_expense_df[
                 [
                     "client_id",
-                    "wisdom_tree_id",
+                    "product_id",
                     "month_date",
                     "is_holdings_backfilled",
                     "holdings",
