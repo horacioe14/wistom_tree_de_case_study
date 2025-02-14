@@ -423,6 +423,7 @@ class WisdomTreeDataPipeline:
 
             # Backward fill NAV values within each product_id
             nav_data = nav_data.sort_values(["market_date"]).reset_index()
+
             nav_data["is_nav_backfilled"] = (
                 nav_data["net_asset_value"].isna().astype(bool)
             )
