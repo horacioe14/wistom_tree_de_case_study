@@ -313,7 +313,7 @@ class WisdomTreeDataPipeline:
         try:
             # Generate a full list of months from the given date going back 11 months
             all_months = pd.date_range(
-                end=input_quarter_date, periods=12, freq="M")
+                end=input_quarter_date, periods=12, freq="ME")
 
             # Find the missing months
             input_holdings_df["month_date"] = input_holdings_df["month_date"].apply(
