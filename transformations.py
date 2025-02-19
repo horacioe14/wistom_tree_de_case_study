@@ -199,11 +199,11 @@ class WisdomTreeDataPipeline:
 
             # Adjust WCLD stock split (1-for-3 on 31 March 2024)
             # Starting from 30th due to backfill
-            output_nav_df.loc[
-                (output_nav_df["product_id"] == 3105371)
-                & (output_nav_df["market_date"] >= "2024-03-30"),
-                "net_asset_value",
-            ] *= 3
+            # output_nav_df.loc[
+            #     (output_nav_df["product_id"] == 3105371)
+            #     & (output_nav_df["market_date"] >= "2024-03-30"),
+            #     "net_asset_value",
+            # ] *= 3
 
             print("nav data processing completed successfully")
             return output_nav_df
@@ -296,11 +296,11 @@ class WisdomTreeDataPipeline:
                 int)
 
             # Adjust for WCLD stock split (1:3 on 31 March 2024)
-            # holdings_df.loc[
-            #     (holdings_df["product_id"] == 3105371)
-            #     & (holdings_df["month_date"] >= "2024-03-31"),
-            #     "holdings",
-            # ] /= 3
+            holdings_df.loc[
+                (holdings_df["product_id"] == 3105371)
+                & (holdings_df["month_date"] >= "2024-03-31"),
+                "holdings",
+            ] *= 3
             # clean table columns
             holdings_df = holdings_df[
                 [
