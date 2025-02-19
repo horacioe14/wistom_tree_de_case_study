@@ -4,6 +4,7 @@ import time
 from config import (
     EXCEL_FILE_PATH,
     ANALYTICS_OUTPUT_FILE_PATH,
+    EXPENSE_OUTPUT_FILE_PATH,
     HOLDINGS_OUTPUT_FILE_PATH,
     NAV_OUTPUT_FILE_PATH
 )
@@ -18,10 +19,14 @@ if __name__ == "__main__":
 
     nav_df = etl_pipeline.extract_nav()
 
+    expense_df = etl_pipeline.extract_expense_ratios(nav_df)
+
     holdings_df = etl_pipeline.process_client_holdings()
 
     monthly_analytics_df = etl_pipeline.transform_monthly_analytics(
-        holdings_df, nav_df)
+        expense_df, holdings_df, nav_df)
+
+    expense_df.to_excel(EXPENSE_OUTPUT_FILE_PATH, index=False)
 
     holdings_df.to_excel(HOLDINGS_OUTPUT_FILE_PATH, index=False)
 

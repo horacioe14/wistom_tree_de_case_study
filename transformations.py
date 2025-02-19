@@ -18,7 +18,7 @@ class WisdomTreeDataPipeline:
         self.file_path = file_path
         self.excel_file = pd.ExcelFile(file_path)
         self.products_table = self.extract_products()
-        self.expense_ratios_table = self.extract_expense_ratios()
+        # self.expense_ratios_table = self.extract_expense_ratios()
 
     def nav_format_and_convert_date(self, date_string: str):
         """
@@ -88,7 +88,66 @@ class WisdomTreeDataPipeline:
             print(f"Error, extract_products_data() failed: {str(e)}")
             return None
 
-    def extract_expense_ratios(self) -> pd.DataFrame:
+    def adjust_expense_ratio(
+            self,
+            input_raw_expense_df: pd.DataFrame,
+            input_nav_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """
+        Backfills expense ratios data of missing dates and NAV values
+        """
+        try:
+            # Date range to get missing dates
+            start_year = input_nav_df["market_date"].min().year
+            end_year = input_nav_df["market_date"].max().year
+
+            # Generate a complete date range using the last day of each month
+            complete_dates = pd.date_range(
+                start=f"{start_year}-01-01",
+                end=f"{end_year}-12-31",
+                freq="ME"  # "ME" ensures the last day of each month
+            )
+
+            # Create a new dataframe with completed date range
+            # for each product_id
+            unique_ids = input_raw_expense_df["product_id"].unique()
+            # Cartesian product of indexes using the product ids
+            # and full list of dates
+            complete_index = pd.MultiIndex.from_product(
+                [unique_ids, complete_dates], names=[
+                    "product_id", "last_modified_date"]
+            )
+
+            # Reindex expense data to ensure all dates exist for each
+            # product_id
+            expense_ratios_df = input_raw_expense_df.set_index(["product_id", "last_modified_date"]).reindex(
+                complete_index
+            )
+
+            # Backward fill expense values within each product_id
+            expense_ratios_df = expense_ratios_df.sort_values(
+                ["last_modified_date"]).reset_index()
+
+            expense_ratios_df["is_expense_ratios_backfilled"] = (
+                expense_ratios_df["expense_ratio"].isna().astype(bool)
+            )
+            expense_ratios_df["expense_ratio"] = expense_ratios_df.groupby(["product_id"])[
+                "expense_ratio"
+            ].bfill()
+
+            # Forward fill if any remaining nulls
+            if expense_ratios_df["expense_ratio"].isnull().values.any():
+                expense_ratios_df["expense_ratio"] = expense_ratios_df.groupby(["product_id"])[
+                    "expense_ratio"
+                ].ffill()
+
+            return expense_ratios_df
+
+        except Exception as e:
+            print(f"Error, adjust_expense_ratio() failed: {str(e)}")
+            return None
+
+    def extract_expense_ratios(self, input_nav_df: pd.DataFrame) -> pd.DataFrame:
         """
         1. Extracts WT Expense Ratios table
         2. renames columns.
@@ -100,7 +159,16 @@ class WisdomTreeDataPipeline:
                 columns={"Expense Ratio": "expense_ratio",
                          "WT ID": "product_id"}
             )
-            return expense_df
+            expense_df["last_modified_date"] = pd.to_datetime(
+                expense_df["last_modified_date"],
+                format="%Y-%m-%d",
+                errors="coerce",
+            )
+            output_expense_df = self.adjust_expense_ratio(
+                expense_df, input_nav_df)
+            print("expense ratios data processing completed successfully")
+
+            return output_expense_df
         except Exception as e:
             print(f"Error, extract_expense_ratios() failed: {str(e)}")
             return None
@@ -228,11 +296,11 @@ class WisdomTreeDataPipeline:
                 int)
 
             # Adjust for WCLD stock split (1:3 on 31 March 2024)
-            holdings_df.loc[
-                (holdings_df["product_id"] == 3105371)
-                & (holdings_df["month_date"] >= "2024-03-31"),
-                "holdings",
-            ] /= 3
+            # holdings_df.loc[
+            #     (holdings_df["product_id"] == 3105371)
+            #     & (holdings_df["month_date"] >= "2024-03-31"),
+            #     "holdings",
+            # ] /= 3
             # clean table columns
             holdings_df = holdings_df[
                 [
@@ -444,7 +512,10 @@ class WisdomTreeDataPipeline:
             return None
 
     def transform_monthly_analytics(
-        self, input_holdings_df: pd.DataFrame, input_nav_df: pd.DataFrame
+        self,
+        input_expense_df: pd.DataFrame,
+        input_holdings_df: pd.DataFrame,
+        input_nav_df: pd.DataFrame
     ) -> pd.DataFrame:
         """
         Estimates:
@@ -459,6 +530,11 @@ class WisdomTreeDataPipeline:
             holdings_latest_df = input_holdings_df[
                 input_holdings_df["end_date"].isnull()
             ]
+
+            # Get the latest data of expense
+            # expense_latest_df = self.adjust_expense_ratio(input_nav_df)
+            # print(expense_latest_df.head(100))
+
             holdings_latest_df = holdings_latest_df.sort_values(
                 ["client_id", "product_id", "month_date"]
             )
@@ -470,16 +546,20 @@ class WisdomTreeDataPipeline:
                 right_on=["product_id", "market_date"],
                 how="left",
             )
+
             holdings_nav_expense_df = holdings_nav_df.merge(
-                self.expense_ratios_table, on=["product_id"], how="left"
+                input_expense_df,
+                left_on=["product_id", "month_date"],
+                right_on=["product_id", "last_modified_date"],
+                how="left",
             )
 
-            # Adjust GGRA expense ratio change on 30 June 2024
-            holdings_nav_expense_df.loc[
-                (holdings_nav_expense_df["product_id"] == 1001656)
-                & (holdings_nav_expense_df["market_date"] < pd.Timestamp("2024-06-30")),
-                "expense_ratio",
-            ] = 0.0028
+            # # Adjust GGRA expense ratio change on 30 June 2024
+            # holdings_nav_expense_df.loc[
+            #     (holdings_nav_expense_df["product_id"] == 1001656)
+            #     & (holdings_nav_expense_df["market_date"] < pd.Timestamp("2024-06-30")),
+            #     "expense_ratio",
+            # ] = 0.0028
 
             ## CALCULATIONS##
             # AUM = hodlings * nav
@@ -518,6 +598,7 @@ class WisdomTreeDataPipeline:
                     "is_nav_backfilled",
                     "net_asset_value",
                     "assets_under_management",
+                    "is_expense_ratios_backfilled",
                     "daily_revenue",
                     "share_change",
                     "net_flow",
